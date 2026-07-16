@@ -1,0 +1,112 @@
+diff --git a/ihp-sg13cmos5l/libs.tech/klayout/tech/lvs/run_lvs.py b/ihp-sg13cmos5l/libs.tech/klayout/tech/lvs/run_lvs.py
+index 2797eec..6a5d8fd 100755
+--- a/ihp-sg13cmos5l/libs.tech/klayout/tech/lvs/run_lvs.py
++++ b/ihp-sg13cmos5l/libs.tech/klayout/tech/lvs/run_lvs.py
+@@ -528,6 +528,7 @@ def generate_klayout_switches(
+         "no_series_res": "true" if args.no_series_res else "false",
+         "no_parallel_res": "true" if args.no_parallel_res else "false",
+         "combine_devices": "true" if args.combine_devices else "false",
++        "disable_tap_extraction": "true" if args.disable_tap_extraction else "false",
+         "purge": "true" if args.purge else "false",
+         "purge_nets": "true" if args.purge_nets else "false",
+         "topcell": get_run_top_cell_name(args, layout_path),
+@@ -777,6 +778,7 @@ if __name__ == "__main__":
+                [--topcell=<topcell_name>] [--run_mode=<run_mode>]
+                [--no_net_names] [--spice_comments] [--net_only] [--no_simplify]
+                [--no_series_res] [--no_parallel_res] [--combine_devices] [--top_lvl_pins]
++               [--disable_tap_extraction]
+                [--purge] [--purge_nets] [--ignore_top_ports_mismatch]
+                [--implicit_nets=<nets>]
+     """
+@@ -827,6 +829,11 @@ if __name__ == "__main__":
+     parser.add_argument("--no_series_res", action="store_true", help="Disable resistor series simplification.")
+     parser.add_argument("--no_parallel_res", action="store_true", help="Disable resistor parallel simplification.")
+     parser.add_argument("--combine_devices", action="store_true", help="Enable generic device combination.")
++    parser.add_argument(
++        "--disable_tap_extraction",
++        action="store_true",
++        help="Skip ntap1/ptap1 device extraction so taps are not required in the schematic (aligns with Magic+Netgen LVS). Extraction is enabled by default.",
++    )
+     parser.add_argument("--top_lvl_pins", action="store_true", help="Create top-level pins in netlists.")
+     parser.add_argument("--purge", action="store_true", help="Purge unused nets/devices.")
+     parser.add_argument("--purge_nets", action="store_true", help="Purge floating nets.")
+diff --git a/ihp-sg13cmos5l/libs.tech/klayout/tech/lvs/sg13cmos5l.lvs b/ihp-sg13cmos5l/libs.tech/klayout/tech/lvs/sg13cmos5l.lvs
+index e99d0fe..3d39cd5 100755
+--- a/ihp-sg13cmos5l/libs.tech/klayout/tech/lvs/sg13cmos5l.lvs
++++ b/ihp-sg13cmos5l/libs.tech/klayout/tech/lvs/sg13cmos5l.lvs
+@@ -178,6 +178,14 @@ PARALLEL_RES = !bool_check?($no_parallel_res)
+ 
+ logger.info("Selected PARALLEL_RES option: #{PARALLEL_RES}")
+ 
++# DISABLE_TAP_EXTRACTION
++# false (default): extract ntap1/ptap1 as devices (schematic must contain matching taps).
++# true: skip ntap/ptap device extraction so taps are not required in the schematic,
++#       aligning with Magic+Netgen LVS.
++DISABLE_TAP_EXTRACTION = bool_check?($disable_tap_extraction)
++
++logger.info("Selected DISABLE_TAP_EXTRACTION option: #{DISABLE_TAP_EXTRACTION}")
++
+ # === RUN MODE ===
+ case $run_mode
+ when 'deep'
+diff --git a/ihp-sg13cmos5l/libs.tech/klayout/tech/macros/sg13cmos5l_lvs.lym b/ihp-sg13cmos5l/libs.tech/klayout/tech/macros/sg13cmos5l_lvs.lym
+index ac3c410..e3b9352 100644
+--- a/ihp-sg13cmos5l/libs.tech/klayout/tech/macros/sg13cmos5l_lvs.lym
++++ b/ihp-sg13cmos5l/libs.tech/klayout/tech/macros/sg13cmos5l_lvs.lym
+@@ -58,6 +58,7 @@ DEFAULT_OPTIONS = {
+   'no_series_res' => false,
+   'no_parallel_res' => false,
+   'combine_devices' => false,
++  'disable_tap_extraction' => false,
+   'top_lvl_pins' => false,
+   'ignore_top_ports_mismatch' => false,
+   'purge' => false,
+@@ -186,6 +187,7 @@ cmd_opts &lt;&lt; "--layout_netlist=#{Shellwords.escape(layout_netlist_path)}" u
+   no_series_res
+   no_parallel_res
+   combine_devices
++  disable_tap_extraction
+   top_lvl_pins
+   ignore_top_ports_mismatch
+   purge
+diff --git a/ihp-sg13cmos5l/libs.tech/klayout/tech/macros/sg13cmos5l_lvs_options.lym b/ihp-sg13cmos5l/libs.tech/klayout/tech/macros/sg13cmos5l_lvs_options.lym
+index 73f649a..a7c9b0c 100644
+--- a/ihp-sg13cmos5l/libs.tech/klayout/tech/macros/sg13cmos5l_lvs_options.lym
++++ b/ihp-sg13cmos5l/libs.tech/klayout/tech/macros/sg13cmos5l_lvs_options.lym
+@@ -54,6 +54,7 @@ module SG13G2LVSOptions
+     'no_series_res' => false,
+     'no_parallel_res' => false,
+     'combine_devices' => false,
++    'disable_tap_extraction' => false,
+     'top_lvl_pins' => false,
+     'ignore_top_ports_mismatch' => false,
+     'purge' => false,
+@@ -270,6 +271,12 @@ module SG13G2LVSOptions
+       options['combine_devices'],
+       'Enable generic device combination.'
+     )
++    @widgets[:disable_tap_extraction] = create_check_box(
++      'Disable ntap/ptap Extraction',
++      options['disable_tap_extraction'],
++      'Skip ntap1/ptap1 device extraction so taps are not required in the schematic ' \
++      '(aligns with Magic+Netgen LVS). Extraction is enabled by default (CLI: --disable_tap_extraction).'
++    )
+     @widgets[:purge] = create_check_box(
+       'Purge',
+       options['purge'],
+@@ -360,6 +367,7 @@ module SG13G2LVSOptions
+     simplification_group = RBA::QGroupBox.new('Simplification and Reduction')
+     simplification_layout = RBA::QFormLayout.new(simplification_group)
+     simplification_layout.setSpacing(8)
++    simplification_layout.addRow('', @widgets[:disable_tap_extraction])
+     simplification_layout.addRow('', @widgets[:no_simplify])
+     simplification_layout.addRow('', @widgets[:no_series_res])
+     simplification_layout.addRow('', @widgets[:no_parallel_res])
+@@ -636,6 +644,7 @@ module SG13G2LVSOptions
+     options['no_series_res'] = @widgets[:no_series_res].checked
+     options['no_parallel_res'] = @widgets[:no_parallel_res].checked
+     options['combine_devices'] = @widgets[:combine_devices].checked
++    options['disable_tap_extraction'] = @widgets[:disable_tap_extraction].checked
+     options['purge'] = @widgets[:purge].checked
+     options['purge_nets'] = @widgets[:purge_nets].checked
+   end

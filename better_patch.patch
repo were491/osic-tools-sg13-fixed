@@ -1,0 +1,460 @@
+From f0c64bdd4d5024e0696450c9043772578729d6ca Mon Sep 17 00:00:00 2001
+From: Simon Dorrer <simon.dorrer@jku.at>
+Date: Wed, 1 Jul 2026 23:13:04 +0200
+Subject: [PATCH 1/4] added `enable_tap_extraction` option to KLayout LVS
+
+---
+ .../libs.tech/klayout/tech/lvs/README.md      |  3 ++
+ .../tech/lvs/rule_decks/tap_extraction.lvs    | 47 +++++++++++--------
+ .../libs.tech/klayout/tech/lvs/run_lvs.py     |  7 +++
+ .../libs.tech/klayout/tech/lvs/sg13g2.lvs     |  7 +++
+ .../unit/diode_devices/layout/isolbox.yaml    |  4 ++
+ .../unit/tap_devices/layout/ntap1.yaml        |  4 ++
+ .../unit/tap_devices/layout/ptap1.yaml        |  4 ++
+ .../klayout/tech/macros/sg13g2_lvs.lym        |  2 +
+ .../tech/macros/sg13g2_lvs_options.lym        |  9 ++++
+ 9 files changed, 30 insertions(+), 8 deletions(-)
+
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/lvs/README.md b/ihp-sg13g2/libs.tech/klayout/tech/lvs/README.md
+index d635a42a9..57e22e2d3 100644
+--- a/ihp-sg13g2/libs.tech/klayout/tech/lvs/README.md
++++ b/ihp-sg13g2/libs.tech/klayout/tech/lvs/README.md
+@@ -60,6 +60,7 @@ run_lvs.py [--layout=<layout_path>]
+            [--topcell=<topcell_name>] [--run_mode=<run_mode>]
+            [--no_net_names] [--spice_comments] [--net_only] [--no_simplify]
+            [--no_series_res] [--no_parallel_res] [--combine_devices] [--top_lvl_pins]
++           [--enable_tap_extraction]
+            [--purge] [--purge_nets] [--ignore_top_ports_mismatch]
+            [--implicit_nets=<nets>]
+ ```
+@@ -94,6 +95,8 @@ run_lvs.py [--layout=<layout_path>]
+ 
+ - `--combine_devices`                 Enables device combination for both layout and schematic netlists.
+ 
++- `--enable_tap_extraction`           Extracts `ntap1`/`ptap1` as devices. Disabled by default so taps are not required in the schematic, matching Magic+Netgen LVS behavior.
++
+ - `--top_lvl_pins`                    Creates pins for top-level circuits in both layout and schematic netlists.
+ 
+ - `--purge`                           Removes unused nets from both layout and schematic netlists.
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_extraction.lvs b/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_extraction.lvs
+index 7376a2818..a41bf8280 100644
+--- a/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_extraction.lvs
++++ b/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_extraction.lvs
+@@ -23,24 +23,31 @@
+ 
+ logger.info('Starting Taps EXTRACTION')
+ 
+-# ntap1
+-logger.info('Extracting ntap1 device')
+-# ntap1 is extracted with the diode extractor because the geometry is a nested
+-# junction (tie inside well). We map diode regions as:
+-#   - P => ntap1_tie  (tie contact)
+-#   - N => ntap1_well (nwell body)
+-# This preserves PDK terminal order in the written netlist as "TIE WELL".
+-# See: https://www.klayout.de/doc/manual/lvs_device_extractors.html#h2-117
+-cheat("*") {
+-  extract_devices(diode('ntap1', CustomTap), { 'P' => ntap1_tie, 'N' => ntap1_well })
+-}
+-
+-# ptap1
+-logger.info('Extracting ptap1 device')
+-# ptap1 follows the same P/N region mapping rule:
+-#   - P => ptap1_tie (tie contact)
+-#   - N => ptap1_sub (substrate/body region)
+-cheat("*") {
+-  extract_devices(diode('ptap1', CustomTap), { 'P' => ptap1_tie, 'N' => ptap1_sub })
+-}
++# ntap1/ptap1 device extraction is gated by ENABLE_TAP_EXTRACTION (see sg13g2.lvs).
++# When disabled (default), taps are not extracted as devices so the schematic does
++# not need to contain them, matching Magic+Netgen LVS behavior. The tap tie regions
++# are still connected to their well/substrate nets via tap_connections.lvs.
++if ENABLE_TAP_EXTRACTION
++  # ntap1
++  logger.info('Extracting ntap1 device')
++  # ntap1 is extracted with the diode extractor because the geometry is a nested
++  # junction (tie inside well). We map diode regions as:
++  #   - P => ntap1_tie  (tie contact)
++  #   - N => ntap1_well (nwell body)
++  # This preserves PDK terminal order in the written netlist as "TIE WELL".
++  # See: https://www.klayout.de/doc/manual/lvs_device_extractors.html#h2-117
++  cheat("*") {
++    extract_devices(diode('ntap1', CustomTap), { 'P' => ntap1_tie, 'N' => ntap1_well })
++  }
+ 
++  # ptap1
++  logger.info('Extracting ptap1 device')
++  # ptap1 follows the same P/N region mapping rule:
++  #   - P => ptap1_tie (tie contact)
++  #   - N => ptap1_sub (substrate/body region)
++  cheat("*") {
++    extract_devices(diode('ptap1', CustomTap), { 'P' => ptap1_tie, 'N' => ptap1_sub })
++  }
++else
++  logger.info('ENABLE_TAP_EXTRACTION is disabled: skipping ntap1/ptap1 device extraction.')
++end
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/lvs/run_lvs.py b/ihp-sg13g2/libs.tech/klayout/tech/lvs/run_lvs.py
+index 2797eecf2..c172c2895 100755
+--- a/ihp-sg13g2/libs.tech/klayout/tech/lvs/run_lvs.py
++++ b/ihp-sg13g2/libs.tech/klayout/tech/lvs/run_lvs.py
+@@ -528,6 +528,7 @@ def generate_klayout_switches(
+         "no_series_res": "true" if args.no_series_res else "false",
+         "no_parallel_res": "true" if args.no_parallel_res else "false",
+         "combine_devices": "true" if args.combine_devices else "false",
++        "enable_tap_extraction": "true" if args.enable_tap_extraction else "false",
+         "purge": "true" if args.purge else "false",
+         "purge_nets": "true" if args.purge_nets else "false",
+         "topcell": get_run_top_cell_name(args, layout_path),
+@@ -777,6 +778,7 @@ def main(lvs_run_dir: str, args: argparse.Namespace):
+                [--topcell=<topcell_name>] [--run_mode=<run_mode>]
+                [--no_net_names] [--spice_comments] [--net_only] [--no_simplify]
+                [--no_series_res] [--no_parallel_res] [--combine_devices] [--top_lvl_pins]
++               [--enable_tap_extraction]
+                [--purge] [--purge_nets] [--ignore_top_ports_mismatch]
+                [--implicit_nets=<nets>]
+     """
+@@ -827,6 +829,11 @@ def main(lvs_run_dir: str, args: argparse.Namespace):
+     parser.add_argument("--no_series_res", action="store_true", help="Disable resistor series simplification.")
+     parser.add_argument("--no_parallel_res", action="store_true", help="Disable resistor parallel simplification.")
+     parser.add_argument("--combine_devices", action="store_true", help="Enable generic device combination.")
++    parser.add_argument(
++        "--enable_tap_extraction",
++        action="store_true",
++        help="Extract ntap1/ptap1 as devices. Disabled by default to align with Magic+Netgen LVS.",
++    )
+     parser.add_argument("--top_lvl_pins", action="store_true", help="Create top-level pins in netlists.")
+     parser.add_argument("--purge", action="store_true", help="Purge unused nets/devices.")
+     parser.add_argument("--purge_nets", action="store_true", help="Purge floating nets.")
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/lvs/sg13g2.lvs b/ihp-sg13g2/libs.tech/klayout/tech/lvs/sg13g2.lvs
+index e99d0fed4..dfe8be1cd 100755
+--- a/ihp-sg13g2/libs.tech/klayout/tech/lvs/sg13g2.lvs
++++ b/ihp-sg13g2/libs.tech/klayout/tech/lvs/sg13g2.lvs
+@@ -178,6 +178,13 @@ PARALLEL_RES = !bool_check?($no_parallel_res)
+ 
+ logger.info("Selected PARALLEL_RES option: #{PARALLEL_RES}")
+ 
++# ENABLE_TAP_EXTRACTION
++# true: extract ntap1/ptap1 as devices (schematic must contain matching taps).
++# false (default): skip ntap/ptap device extraction to align with Magic+Netgen LVS.
++ENABLE_TAP_EXTRACTION = bool_check?($enable_tap_extraction)
++
++logger.info("Selected ENABLE_TAP_EXTRACTION option: #{ENABLE_TAP_EXTRACTION}")
++
+ # === RUN MODE ===
+ case $run_mode
+ when 'deep'
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs.lym b/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs.lym
+index ac3c41079..c09a6d092 100644
+--- a/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs.lym
++++ b/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs.lym
+@@ -58,6 +58,7 @@ DEFAULT_OPTIONS = {
+   'no_series_res' => false,
+   'no_parallel_res' => false,
+   'combine_devices' => false,
++  'enable_tap_extraction' => false,
+   'top_lvl_pins' => false,
+   'ignore_top_ports_mismatch' => false,
+   'purge' => false,
+@@ -186,6 +187,7 @@ cmd_opts &lt;&lt; "--layout_netlist=#{Shellwords.escape(layout_netlist_path)}" u
+   no_series_res
+   no_parallel_res
+   combine_devices
++  enable_tap_extraction
+   top_lvl_pins
+   ignore_top_ports_mismatch
+   purge
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs_options.lym b/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs_options.lym
+index 73f649a52..4062d1e8b 100644
+--- a/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs_options.lym
++++ b/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs_options.lym
+@@ -54,6 +54,7 @@ module SG13G2LVSOptions
+     'no_series_res' => false,
+     'no_parallel_res' => false,
+     'combine_devices' => false,
++    'enable_tap_extraction' => false,
+     'top_lvl_pins' => false,
+     'ignore_top_ports_mismatch' => false,
+     'purge' => false,
+@@ -270,6 +271,12 @@ module SG13G2LVSOptions
+       options['combine_devices'],
+       'Enable generic device combination.'
+     )
++    @widgets[:enable_tap_extraction] = create_check_box(
++      'Enable ntap/ptap Extraction',
++      options['enable_tap_extraction'],
++      'Extract ntap1/ptap1 as devices (schematic must contain matching taps). ' \
++      'Disabled by default to align with Magic+Netgen LVS (CLI: --enable_tap_extraction).'
++    )
+     @widgets[:purge] = create_check_box(
+       'Purge',
+       options['purge'],
+@@ -349,6 +356,7 @@ module SG13G2LVSOptions
+       'Case-sensitive implicit net patterns. Use only when some nets are intentionally connected at higher hierarchy.'
+     )
+     comparison_layout.addRow('Implicit Nets:', @widgets[:implicit_nets_adv])
++    comparison_layout.addRow('', @widgets[:enable_tap_extraction])
+ 
+     netlist_ops_group = RBA::QGroupBox.new('Netlist Formatting')
+     netlist_ops_layout = RBA::QFormLayout.new(netlist_ops_group)
+@@ -636,6 +644,7 @@ module SG13G2LVSOptions
+     options['no_series_res'] = @widgets[:no_series_res].checked
+     options['no_parallel_res'] = @widgets[:no_parallel_res].checked
+     options['combine_devices'] = @widgets[:combine_devices].checked
++    options['enable_tap_extraction'] = @widgets[:enable_tap_extraction].checked
+     options['purge'] = @widgets[:purge].checked
+     options['purge_nets'] = @widgets[:purge_nets].checked
+   end
+
+From 042811ee36577d3635e9f8533788bf4c65ac7f6d Mon Sep 17 00:00:00 2001
+From: Simon Dorrer <simon.dorrer@jku.at>
+Date: Fri, 3 Jul 2026 09:27:45 +0200
+Subject: [PATCH 2/4] renamed to `disable tap_extraction` --> default is
+ down-compatible
+
+---
+ ihp-sg13g2/libs.tech/klayout/tech/lvs/README.md  |  4 ++--
+ .../tech/lvs/rule_decks/tap_extraction.lvs       | 13 +++++++------
+ ihp-sg13g2/libs.tech/klayout/tech/lvs/run_lvs.py |  8 ++++----
+ ihp-sg13g2/libs.tech/klayout/tech/lvs/sg13g2.lvs | 11 ++++++-----
+ .../unit/diode_devices/layout/isolbox.yaml       |  4 ----
+ .../libs.tech/klayout/tech/macros/sg13g2_lvs.lym |  4 ++--
+ .../klayout/tech/macros/sg13g2_lvs_options.lym   | 16 ++++++++--------
+ 10 files changed, 29 insertions(+), 40 deletions(-)
+
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/lvs/README.md b/ihp-sg13g2/libs.tech/klayout/tech/lvs/README.md
+index 57e22e2d3..ee6da0641 100644
+--- a/ihp-sg13g2/libs.tech/klayout/tech/lvs/README.md
++++ b/ihp-sg13g2/libs.tech/klayout/tech/lvs/README.md
+@@ -60,7 +60,7 @@ run_lvs.py [--layout=<layout_path>]
+            [--topcell=<topcell_name>] [--run_mode=<run_mode>]
+            [--no_net_names] [--spice_comments] [--net_only] [--no_simplify]
+            [--no_series_res] [--no_parallel_res] [--combine_devices] [--top_lvl_pins]
+-           [--enable_tap_extraction]
++           [--disable_tap_extraction]
+            [--purge] [--purge_nets] [--ignore_top_ports_mismatch]
+            [--implicit_nets=<nets>]
+ ```
+@@ -95,7 +95,7 @@ run_lvs.py [--layout=<layout_path>]
+ 
+ - `--combine_devices`                 Enables device combination for both layout and schematic netlists.
+ 
+-- `--enable_tap_extraction`           Extracts `ntap1`/`ptap1` as devices. Disabled by default so taps are not required in the schematic, matching Magic+Netgen LVS behavior.
++- `--disable_tap_extraction`          Skips `ntap1`/`ptap1` device extraction so taps are not required in the schematic, matching Magic+Netgen LVS behavior. Extraction is enabled by default.
+ 
+ - `--top_lvl_pins`                    Creates pins for top-level circuits in both layout and schematic netlists.
+ 
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_extraction.lvs b/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_extraction.lvs
+index a41bf8280..d664c91d3 100644
+--- a/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_extraction.lvs
++++ b/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_extraction.lvs
+@@ -23,11 +23,12 @@
+ 
+ logger.info('Starting Taps EXTRACTION')
+ 
+-# ntap1/ptap1 device extraction is gated by ENABLE_TAP_EXTRACTION (see sg13g2.lvs).
+-# When disabled (default), taps are not extracted as devices so the schematic does
+-# not need to contain them, matching Magic+Netgen LVS behavior. The tap tie regions
+-# are still connected to their well/substrate nets via tap_connections.lvs.
+-if ENABLE_TAP_EXTRACTION
++# ntap1/ptap1 device extraction is gated by DISABLE_TAP_EXTRACTION (see sg13g2.lvs).
++# Extraction is enabled by default. When it is disabled, taps are not extracted as
++# devices so the schematic does not need to contain them, matching Magic+Netgen LVS
++# behavior. The tap tie regions are still connected to their well/substrate nets via
++# tap_connections.lvs.
++unless DISABLE_TAP_EXTRACTION
+   # ntap1
+   logger.info('Extracting ntap1 device')
+   # ntap1 is extracted with the diode extractor because the geometry is a nested
+@@ -49,5 +50,5 @@ if ENABLE_TAP_EXTRACTION
+     extract_devices(diode('ptap1', CustomTap), { 'P' => ptap1_tie, 'N' => ptap1_sub })
+   }
+ else
+-  logger.info('ENABLE_TAP_EXTRACTION is disabled: skipping ntap1/ptap1 device extraction.')
++  logger.info('DISABLE_TAP_EXTRACTION is enabled: skipping ntap1/ptap1 device extraction.')
+ end
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/lvs/run_lvs.py b/ihp-sg13g2/libs.tech/klayout/tech/lvs/run_lvs.py
+index c172c2895..6a5d8fda6 100755
+--- a/ihp-sg13g2/libs.tech/klayout/tech/lvs/run_lvs.py
++++ b/ihp-sg13g2/libs.tech/klayout/tech/lvs/run_lvs.py
+@@ -528,7 +528,7 @@ def generate_klayout_switches(
+         "no_series_res": "true" if args.no_series_res else "false",
+         "no_parallel_res": "true" if args.no_parallel_res else "false",
+         "combine_devices": "true" if args.combine_devices else "false",
+-        "enable_tap_extraction": "true" if args.enable_tap_extraction else "false",
++        "disable_tap_extraction": "true" if args.disable_tap_extraction else "false",
+         "purge": "true" if args.purge else "false",
+         "purge_nets": "true" if args.purge_nets else "false",
+         "topcell": get_run_top_cell_name(args, layout_path),
+@@ -778,7 +778,7 @@ def main(lvs_run_dir: str, args: argparse.Namespace):
+                [--topcell=<topcell_name>] [--run_mode=<run_mode>]
+                [--no_net_names] [--spice_comments] [--net_only] [--no_simplify]
+                [--no_series_res] [--no_parallel_res] [--combine_devices] [--top_lvl_pins]
+-               [--enable_tap_extraction]
++               [--disable_tap_extraction]
+                [--purge] [--purge_nets] [--ignore_top_ports_mismatch]
+                [--implicit_nets=<nets>]
+     """
+@@ -830,9 +830,9 @@ def main(lvs_run_dir: str, args: argparse.Namespace):
+     parser.add_argument("--no_parallel_res", action="store_true", help="Disable resistor parallel simplification.")
+     parser.add_argument("--combine_devices", action="store_true", help="Enable generic device combination.")
+     parser.add_argument(
+-        "--enable_tap_extraction",
++        "--disable_tap_extraction",
+         action="store_true",
+-        help="Extract ntap1/ptap1 as devices. Disabled by default to align with Magic+Netgen LVS.",
++        help="Skip ntap1/ptap1 device extraction so taps are not required in the schematic (aligns with Magic+Netgen LVS). Extraction is enabled by default.",
+     )
+     parser.add_argument("--top_lvl_pins", action="store_true", help="Create top-level pins in netlists.")
+     parser.add_argument("--purge", action="store_true", help="Purge unused nets/devices.")
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/lvs/sg13g2.lvs b/ihp-sg13g2/libs.tech/klayout/tech/lvs/sg13g2.lvs
+index dfe8be1cd..3d39cd502 100755
+--- a/ihp-sg13g2/libs.tech/klayout/tech/lvs/sg13g2.lvs
++++ b/ihp-sg13g2/libs.tech/klayout/tech/lvs/sg13g2.lvs
+@@ -178,12 +178,13 @@ PARALLEL_RES = !bool_check?($no_parallel_res)
+ 
+ logger.info("Selected PARALLEL_RES option: #{PARALLEL_RES}")
+ 
+-# ENABLE_TAP_EXTRACTION
+-# true: extract ntap1/ptap1 as devices (schematic must contain matching taps).
+-# false (default): skip ntap/ptap device extraction to align with Magic+Netgen LVS.
+-ENABLE_TAP_EXTRACTION = bool_check?($enable_tap_extraction)
++# DISABLE_TAP_EXTRACTION
++# false (default): extract ntap1/ptap1 as devices (schematic must contain matching taps).
++# true: skip ntap/ptap device extraction so taps are not required in the schematic,
++#       aligning with Magic+Netgen LVS.
++DISABLE_TAP_EXTRACTION = bool_check?($disable_tap_extraction)
+ 
+-logger.info("Selected ENABLE_TAP_EXTRACTION option: #{ENABLE_TAP_EXTRACTION}")
++logger.info("Selected DISABLE_TAP_EXTRACTION option: #{DISABLE_TAP_EXTRACTION}")
+ 
+ # === RUN MODE ===
+ case $run_mode
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs.lym b/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs.lym
+index c09a6d092..e3b935214 100644
+--- a/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs.lym
++++ b/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs.lym
+@@ -58,7 +58,7 @@ DEFAULT_OPTIONS = {
+   'no_series_res' => false,
+   'no_parallel_res' => false,
+   'combine_devices' => false,
+-  'enable_tap_extraction' => false,
++  'disable_tap_extraction' => false,
+   'top_lvl_pins' => false,
+   'ignore_top_ports_mismatch' => false,
+   'purge' => false,
+@@ -187,7 +187,7 @@ cmd_opts &lt;&lt; "--layout_netlist=#{Shellwords.escape(layout_netlist_path)}" u
+   no_series_res
+   no_parallel_res
+   combine_devices
+-  enable_tap_extraction
++  disable_tap_extraction
+   top_lvl_pins
+   ignore_top_ports_mismatch
+   purge
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs_options.lym b/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs_options.lym
+index 4062d1e8b..a7c9b0c22 100644
+--- a/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs_options.lym
++++ b/ihp-sg13g2/libs.tech/klayout/tech/macros/sg13g2_lvs_options.lym
+@@ -54,7 +54,7 @@ module SG13G2LVSOptions
+     'no_series_res' => false,
+     'no_parallel_res' => false,
+     'combine_devices' => false,
+-    'enable_tap_extraction' => false,
++    'disable_tap_extraction' => false,
+     'top_lvl_pins' => false,
+     'ignore_top_ports_mismatch' => false,
+     'purge' => false,
+@@ -271,11 +271,11 @@ module SG13G2LVSOptions
+       options['combine_devices'],
+       'Enable generic device combination.'
+     )
+-    @widgets[:enable_tap_extraction] = create_check_box(
+-      'Enable ntap/ptap Extraction',
+-      options['enable_tap_extraction'],
+-      'Extract ntap1/ptap1 as devices (schematic must contain matching taps). ' \
+-      'Disabled by default to align with Magic+Netgen LVS (CLI: --enable_tap_extraction).'
++    @widgets[:disable_tap_extraction] = create_check_box(
++      'Disable ntap/ptap Extraction',
++      options['disable_tap_extraction'],
++      'Skip ntap1/ptap1 device extraction so taps are not required in the schematic ' \
++      '(aligns with Magic+Netgen LVS). Extraction is enabled by default (CLI: --disable_tap_extraction).'
+     )
+     @widgets[:purge] = create_check_box(
+       'Purge',
+@@ -356,7 +356,6 @@ module SG13G2LVSOptions
+       'Case-sensitive implicit net patterns. Use only when some nets are intentionally connected at higher hierarchy.'
+     )
+     comparison_layout.addRow('Implicit Nets:', @widgets[:implicit_nets_adv])
+-    comparison_layout.addRow('', @widgets[:enable_tap_extraction])
+ 
+     netlist_ops_group = RBA::QGroupBox.new('Netlist Formatting')
+     netlist_ops_layout = RBA::QFormLayout.new(netlist_ops_group)
+@@ -368,6 +367,7 @@ module SG13G2LVSOptions
+     simplification_group = RBA::QGroupBox.new('Simplification and Reduction')
+     simplification_layout = RBA::QFormLayout.new(simplification_group)
+     simplification_layout.setSpacing(8)
++    simplification_layout.addRow('', @widgets[:disable_tap_extraction])
+     simplification_layout.addRow('', @widgets[:no_simplify])
+     simplification_layout.addRow('', @widgets[:no_series_res])
+     simplification_layout.addRow('', @widgets[:no_parallel_res])
+@@ -644,7 +644,7 @@ module SG13G2LVSOptions
+     options['no_series_res'] = @widgets[:no_series_res].checked
+     options['no_parallel_res'] = @widgets[:no_parallel_res].checked
+     options['combine_devices'] = @widgets[:combine_devices].checked
+-    options['enable_tap_extraction'] = @widgets[:enable_tap_extraction].checked
++    options['disable_tap_extraction'] = @widgets[:disable_tap_extraction].checked
+     options['purge'] = @widgets[:purge].checked
+     options['purge_nets'] = @widgets[:purge_nets].checked
+   end
+
+From 40e9358b288626425893cb00e4cf3c8170e84da2 Mon Sep 17 00:00:00 2001
+From: Simon Dorrer <simon.dorrer@jku.at>
+Date: Fri, 3 Jul 2026 09:28:09 +0200
+Subject: [PATCH 3/4] updated `tap_connections.lvs` to connect tie / well and
+ tie / sub
+
+---
+ .../klayout/tech/lvs/rule_decks/tap_connections.lvs    | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_connections.lvs b/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_connections.lvs
+index f922e2a68..83a078dd3 100644
+--- a/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_connections.lvs
++++ b/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_connections.lvs
+@@ -30,3 +30,13 @@ connect(ntap1_well, nwell_drw)
+ # ptap1
+ connect(ptap1_tie, cont_drw)
+ connect(ptap1_sub, pwell)
++
++# When tap extraction is disabled (see DISABLE_TAP_EXTRACTION in sg13g2.lvs), the
++# ntap1/ptap1 devices are not created. The n+/p+ tie is physically the same node as
++# its well/substrate, so merge them here. This keeps the well/substrate bulk connected
++# to the power nets through the tie contact, matching Magic+Netgen LVS (which does not
++# model taps as devices). See IHP-Open-PDK issue #955.
++if DISABLE_TAP_EXTRACTION
++  connect(ntap1_tie, ntap1_well)
++  connect(ptap1_tie, ptap1_sub)
++end
+
+From 1188f05f1f54fced1a6d4dc4e25226c843ea5b34 Mon Sep 17 00:00:00 2001
+From: Simon Dorrer <simon.dorrer@jku.at>
+Date: Fri, 3 Jul 2026 12:27:11 +0200
+Subject: [PATCH 4/4] updated comments
+
+---
+ .../libs.tech/klayout/tech/lvs/rule_decks/tap_connections.lvs  | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_connections.lvs b/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_connections.lvs
+index 83a078dd3..dfadb8379 100644
+--- a/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_connections.lvs
++++ b/ihp-sg13g2/libs.tech/klayout/tech/lvs/rule_decks/tap_connections.lvs
+@@ -34,8 +34,7 @@ connect(ptap1_sub, pwell)
+ # When tap extraction is disabled (see DISABLE_TAP_EXTRACTION in sg13g2.lvs), the
+ # ntap1/ptap1 devices are not created. The n+/p+ tie is physically the same node as
+ # its well/substrate, so merge them here. This keeps the well/substrate bulk connected
+-# to the power nets through the tie contact, matching Magic+Netgen LVS (which does not
+-# model taps as devices). See IHP-Open-PDK issue #955.
++# to the power nets through the tie contact, matching Magic+Netgen LVS.
+ if DISABLE_TAP_EXTRACTION
+   connect(ntap1_tie, ntap1_well)
+   connect(ptap1_tie, ptap1_sub)
